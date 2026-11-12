@@ -4,12 +4,14 @@ Notes and past-year questions for **BSEE4001 Speech Technology** (IIT Madras BS 
 
 - **[Open the website](https://manyakaistha.github.io/SpeechTechnology-Notes/)**
 - [Past-paper topics](https://manyakaistha.github.io/SpeechTechnology-Notes/past-paper-topics.html): pick a topic (for example *sampling, aliasing and sample counts*) and jump to every question that tested it.
+- [ELI12 notes](https://manyakaistha.github.io/SpeechTechnology-Notes/eli12/eli12-start.html): all five weeks in plain language.
 - [Exam study route](https://manyakaistha.github.io/SpeechTechnology-Notes/exam-study-guide.html): what to learn first, ranked P1 to P3.
 
 ## What is inside
 
 | Part | Where | Contents |
 | :-- | :-- | :-- |
+| ELI12 notes | `content/eli12/week-N-eli12.md` | Plain-language "explain like I'm 12" versions of all five weeks, with tiny hand-checkable examples and links to the matching past-paper questions |
 | Weekly notes | `content/week-N/week-N-notes.md` | Weeks 1 to 5: theory, derivations, figures, runnable code with real outputs |
 | Exam-focused guides | `content/week-N/week-N-exam-focused-notes.md` | Beginner-friendly route through each week, weighted by what the papers test (Weeks 1 to 4) |
 | Past papers | `content/week-N/week-N-exam-questions.md` | 98 question occurrences from 18 papers, each with the scanned stem and a worked answer (Weeks 1 to 4) |

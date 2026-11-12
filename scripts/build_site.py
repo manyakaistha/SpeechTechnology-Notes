@@ -264,6 +264,11 @@ def short_week_title(title: str) -> str:
 
 
 def nav_title(p: Page) -> str:
+    m = re.match(r"eli12/week-(\d)-eli12\.md", p.rel)
+    if m:
+        return f"Week {m.group(1)} ELI12"
+    if p.rel == "eli12/eli12-start.md":
+        return "ELI12 start"
     m = re.match(r"week-(\d)/week-\d-(notes|exam-focused-notes|exam-questions)\.md", p.rel)
     if m:
         kind = {"notes": "Notes", "exam-focused-notes": "Exam guide", "exam-questions": "Past papers"}[m.group(2)]
@@ -272,7 +277,7 @@ def nav_title(p: Page) -> str:
 
 
 def week_of(page: Page) -> int | None:
-    m = re.match(r"week-(\d)/", page.rel)
+    m = re.match(r"week-(\d)/", page.rel) or re.match(r"eli12/week-(\d)-eli12", page.rel)
     return int(m.group(1)) if m else None
 
 
@@ -288,6 +293,13 @@ def nav_model(pages: dict[str, Page]):
              ("MAP", "Knowledge map", "Knowledge-Map.html"),
              ("SCOPE", "Curriculum &amp; sources", "source-catalog.html")]
     groups.append(("Start", None, start))
+    eli = [("ELI12", "Start here: plain language", "eli12/eli12-start.html")]
+    for n in range(1, 6):
+        rel = f"eli12/week-{n}-eli12.md"
+        if has(rel):
+            eli.append((f"WEEK {n}", html.escape(pages[rel].title.split(": ", 1)[-1][:1].upper() + pages[rel].title.split(": ", 1)[-1][1:]), rel[:-3] + ".html"))
+    if len(eli) > 1:
+        groups.append(("ELI12 · plain language", None, eli))
     for n in range(1, 6):
         items = []
         for label, rel in (("NOTES", f"week-{n}/week-{n}-notes.md"),
@@ -329,6 +341,7 @@ def render_nav(groups, current_out: str) -> str:
 def reading_sequence(pages: dict[str, Page]) -> list[str]:
     seq = ["index.html", "exam-study-guide.html", "past-paper-topics.html", "exam-question-index.html",
            "Knowledge-Map.html", "source-catalog.html"]
+    seq += ["eli12/eli12-start.html"] + [f"eli12/week-{n}-eli12.html" for n in range(1, 6) if f"eli12/week-{n}-eli12.md" in pages]
     for n in range(1, 6):
         for kind in ("notes", "exam-focused-notes", "exam-questions"):
             rel = f"week-{n}/week-{n}-{kind}.md"
@@ -476,7 +489,10 @@ def home_article(pages: dict[str, Page]) -> str:
         notes = f"week-{n}/week-{n}-notes.md"
         if notes not in pages:
             continue
-        li = [f'<li><a href="week-{n}/week-{n}-notes.html">Study notes</a></li>']
+        li = []
+        if f"eli12/week-{n}-eli12.md" in pages:
+            li.append(f'<li><a href="eli12/week-{n}-eli12.html">Plain language (ELI12)</a></li>')
+        li.append(f'<li><a href="week-{n}/week-{n}-notes.html">Study notes</a></li>')
         stat = "Notes only (no past-paper bank yet)"
         g = f"week-{n}/week-{n}-exam-focused-notes.md"
         q = f"week-{n}/week-{n}-exam-questions.md"
@@ -497,6 +513,10 @@ def home_article(pages: dict[str, Page]) -> str:
 <div class="resource-list">
 <a class="resource-card" href="past-paper-topics.html"><span class="resource-meta">Questions by topic</span><h2>Find every question on a topic</h2><p>Sampling and aliasing, linearity and time-invariance, MFCC steps, GMM calculations, Viterbi tables and more. Each topic links to every paper that tested it, with the worked answer.</p><span class="resource-action">Browse past-paper topics →</span></a>
 <a class="resource-card" href="exam-study-guide.html"><span class="resource-meta">Study route</span><h2>What to learn first, and why</h2><p>Priorities P1 to P3 for Weeks 1 to 4, derived from how often and how directly each mechanism was tested.</p><span class="resource-action">Open the exam study route →</span></a>
+</div>
+<h2>New here? Start in plain language</h2>
+<div class="resource-list">
+<a class="resource-card" href="eli12/eli12-start.html"><span class="resource-meta">ELI12 · all five weeks</span><h2>Speech Technology, explained like you're 12</h2><p>Flipbooks for sampling, trumpets for the voice, weather for HMMs. The same ideas as the weekly notes, with tiny numbers you can check by hand, and links to the exact exam questions each note prepares you for.</p><span class="resource-action">Open the ELI12 notes →</span></a>
 </div>
 <h2>Weekly notes, exam guides and past papers</h2>
 <div class="resource-grid">{''.join(cards)}</div>
@@ -548,6 +568,13 @@ def main() -> int:
             chip = BeautifulSoup('<div class="meta-chips">' + "".join(f"<span>{html.escape(c)}</span>" for c in chips) + "</div>", "html.parser")
             h1 = soup.find("h1")
             (h1.insert_after(chip) if h1 else soup.insert(0, chip))
+        wk = re.match(r"week-(\d)/", p.rel)
+        if wk and f"eli12/week-{wk.group(1)}-eli12.md" in pages:
+            rel_eli = quote(posixpath.relpath(f"eli12/week-{wk.group(1)}-eli12.html", posixpath.dirname(p.out) or "."))
+            tip = BeautifulSoup(f'<div class="callout callout-tip"><span class="callout-title">New to this?</span>'
+                                f'<p>Read the <a href="{rel_eli}">Week {wk.group(1)} plain-language (ELI12) note</a> first, then come back here.</p></div>', "html.parser")
+            anchor = soup.find("div", class_="meta-chips") or soup.find("h1")
+            (anchor.insert_after(tip) if anchor else soup.insert(0, tip))
         p.html = str(soup)
         p.ids = {t["id"] for t in soup.find_all(attrs={"id": True})}
         all_ids[p.out] = p.ids
@@ -555,6 +582,9 @@ def main() -> int:
         w = week_of(p)
         if p.rel.startswith("notes/concepts/"):
             kicker, (ht, hc) = "Concept note", ("One idea,<br>stated precisely.", "Definition. Why it matters. Related.")
+        elif p.rel.startswith("eli12/"):
+            kicker = f"ELI12 · Week {w}" if w else "ELI12 · Plain language"
+            ht, hc = ("Same ideas,<br>plain words.", "Picture it. Count it. Try it.")
         elif w and p.rel.endswith("exam-questions.md"):
             kicker, (ht, hc) = f"Week {w} · Past papers", ("Every question,<br>with the working.", "Scan. Solve. Check.")
         elif w and p.rel.endswith("exam-focused-notes.md"):
