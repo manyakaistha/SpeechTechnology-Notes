@@ -1,0 +1,21 @@
+{
+  "split": [],
+  "merge": [
+    {
+      "anchors": [
+        "ee4001_2022T3_ET_FN--q-mcq-1",
+        "ee4001_2023T1_ET_FN--q-mcq-1",
+        "ee4001_2023T1_ET_AN--q-mcq-1"
+      ],
+      "reason": "Same GMM log-likelihood MCQ with identical options; AN version only uses pi/sigma^2 notation for w/Sigma"
+    },
+    {
+      "anchors": [
+        "ee4001_2022T3_ET_FN--q-mcq-2",
+        "ee4001_2023T1_ET_FN--q-mcq-2",
+        "ee4001_2023T1_ET_AN--q-mcq-2"
+      ],
+      "reason": "Same HMM normalization MCQ with identical options; AN version differs only in LaTeX formatting"
+    }
+  ]
+}

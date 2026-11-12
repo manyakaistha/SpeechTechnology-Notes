@@ -426,6 +426,165 @@ def pagination_html(seq: list[str], titles: dict[str, str], current: str) -> str
 
 
 # ----------------------------------------------------------------------------- generated pages
+def topic_rows(body: str) -> list[list[str]]:
+    """Rows of [topic, evidence-markdown] from a week's 'Topic checklist and evidence' table."""
+    m = re.search(r"## Topic checklist and evidence\s*\n(.*?)(?=\n## )", body, re.S)
+    rows: list[list[str]] = []
+    if not m:
+        return rows
+    cur = None
+    for ln in m.group(1).splitlines():
+        if not ln.startswith("|") or re.match(r"^\|\s*:?-", ln):
+            continue
+        cells = [c.strip() for c in ln.strip().strip("|").split("|")]
+        if len(cells) < 2 or cells[0] == "Topic":
+            continue
+        if cells[0]:
+            cur = [cells[0], cells[1]]
+            rows.append(cur)
+        elif cur:
+            cur[1] += ", " + cells[1]
+    return rows
+
+
+def anchor_topics(pages: dict[str, Page]) -> dict[str, list[str]]:
+    out: dict[str, list[str]] = {}
+    for rel, pg in pages.items():
+        if re.fullmatch(r"week-\d/week-\d-exam-questions\.md", rel):
+            for topic, ev in topic_rows(pg.body):
+                for a in re.findall(r"\(#(ee4001_[^)]+)\)", ev):
+                    out.setdefault(a, [])
+                    if topic not in out[a]:
+                        out[a].append(topic)
+    return out
+
+
+def norm_stem(text: str) -> str:
+    t = text.lower()
+    t = re.sub(r"\(\s*\d+(\.\d+)?\s*points?\s*\)", " ", t)
+    t = re.sub(r"\b(for|in)\b", " ", t)
+    t = re.sub(r"[^a-z0-9.+*/=<>^$ -]", " ", t)
+    return re.sub(r"\s+", " ", t).strip()
+
+
+def group_duplicates(items: list[dict]) -> None:
+    """Assign item['group'] by near-identical stem text (same numbers, high similarity)."""
+    import difflib
+    groups: list[list[dict]] = []
+    for it in items:
+        key = it["stem"]
+        nums = tuple(sorted(re.findall(r"\d+(?:\.\d+)?", key)))
+        for g in groups:
+            ref = g[0]
+            if not key or not ref["stem"]:
+                continue
+            if nums == ref["nums"] and difflib.SequenceMatcher(None, key, ref["stem"]).ratio() >= 0.9:
+                g.append(it)
+                it["nums"] = nums
+                break
+        else:
+            it["nums"] = nums
+            groups.append([it])
+    for i, g in enumerate(groups):
+        for it in g:
+            it["group"] = i
+
+
+def annotate_questions(soup: BeautifulSoup, page: Page, a2t: dict[str, list[str]], report: list[dict]) -> None:
+    """Wrap each question (anchor + h3 + body up to its worked answer) so the page can filter it."""
+    art_children = list(soup.children)
+    heading_re = re.compile(r"^(\d{4}) Term (\d) · (Quiz 1|Quiz 2|End Term) · (\w+) — Question (.+)$")
+    starts = []
+    for i, el in enumerate(art_children):
+        if getattr(el, "name", None) == "h3" and heading_re.match(el.get_text(" ", strip=True)):
+            j = i
+            prev = art_children[i - 1] if i else None
+            k = i - 1
+            while k >= 0 and isinstance(art_children[k], str) and not art_children[k].strip():
+                k -= 1
+            prev = art_children[k] if k >= 0 else None
+            if prev is not None and getattr(prev, "name", None) == "p" and prev.find("a", id=True) and not prev.get_text(strip=True):
+                j = k
+            starts.append((j, i))
+    items = []
+    for n, (j, i) in enumerate(starts):
+        end = starts[n + 1][0] if n + 1 < len(starts) else len(art_children)
+        nodes = [x for x in art_children[j:end]]
+        # trim trailing non-question material (hr, next h2 sections)
+        cut = len(nodes)
+        for idx, x in enumerate(nodes):
+            if getattr(x, "name", None) in ("hr", "h2") and idx > 1:
+                cut = idx
+                break
+        nodes = nodes[:cut]
+        h3 = art_children[i]
+        m = heading_re.match(h3.get_text(" ", strip=True))
+        year, term, kind, session, qrest = m.groups()
+        anchor = (art_children[j].find("a", id=True) or {}).get("id", "") if j != i else ""
+        stem_parts = []
+        for x in nodes:
+            name = getattr(x, "name", None)
+            if x is h3 or name is None:
+                continue
+            if name == "h4" and "Worked answer" in x.get_text():
+                break
+            txt = x.get_text(" ", strip=True)
+            if txt.startswith(("Source:", "Topics:", "Figure ")) or x.find("img"):
+                continue
+            stem_parts.append(txt)
+        items.append({"anchor": anchor, "year": int(year), "term": f"{year} T{term}", "kind": kind,
+                      "session": session, "q": qrest, "stem": norm_stem(" ".join(stem_parts)),
+                      "topics": a2t.get(anchor, ["Other"]), "nodes": nodes})
+    if not items:
+        return
+    group_duplicates(items)
+    # Manual corrections from a reviewed pass (scripts/dup_overrides.json): merge notation-only variants.
+    ov = ROOT / "scripts" / "dup_overrides.json"
+    if ov.exists():
+        by_anchor = {it["anchor"]: it for it in items}
+        for m in json.loads(ov.read_text(encoding="utf-8")).get("merge", []):
+            members = [by_anchor[a] for a in m["anchors"] if a in by_anchor]
+            if len(members) > 1:
+                target = members[0]["group"]
+                for it in members[1:]:
+                    old = it["group"]
+                    for other in items:
+                        if other["group"] == old:
+                            other["group"] = target
+        for sp in json.loads(ov.read_text(encoding="utf-8")).get("split", []):
+            if sp["anchor"] in by_anchor:
+                by_anchor[sp["anchor"]]["group"] = 10_000 + len(items)
+    for it in items:
+        wrap = soup.new_tag("div", attrs={"class": "qitem", "data-year": str(it["year"]),
+                                          "data-topics": "|".join(it["topics"]), "data-group": str(it["group"]),
+                                          "data-label": f'{it["term"]} {it["kind"]} {it["session"]} Q{it["q"].split(" ")[0]}',
+                                          "data-qid": it["anchor"]})
+        it["nodes"][0].insert_before(wrap)
+        for x in it["nodes"]:
+            wrap.append(x.extract())
+        report.append({"page": page.rel, "anchor": it["anchor"], "label": wrap["data-label"], "group": it["group"],
+                       "topics": it["topics"], "stem": it["stem"][:200]})
+    # drop decorative rules between items
+    for hr in soup.find_all("hr"):
+        if hr.find_previous_sibling("div", class_="qitem") is not None and (hr.find_next_sibling() is None or hr.find_next_sibling().name in ("div", "h2")):
+            hr.decompose()
+    # filter bar before the first h2
+    topics = sorted({t for it in items for t in it["topics"]})
+    years = sorted({it["year"] for it in items})
+    opts_t = "".join(f'<option value="{html.escape(t)}">{html.escape(t)}</option>' for t in topics)
+    opts_y = "".join(f'<option value="{y}">{y}</option>' for y in years)
+    bar = BeautifulSoup(f"""<div class="qfilter" role="search" aria-label="Filter questions"><div class="qf-row">
+<label>Topic <select id="qf-topic"><option value="">All topics</option>{opts_t}</select></label>
+<label>Year <select id="qf-year"><option value="">All years</option>{opts_y}</select></label>
+<label class="qf-check"><input type="checkbox" id="qf-dedup"> Remove duplicates</label>
+<button type="button" id="qf-reset">Reset</button></div>
+<p class="qf-count" id="qf-count" role="status" aria-live="polite"></p></div>""", "html.parser")
+    first_item = soup.find("div", class_="qitem")
+    lead = first_item.find_previous_sibling("h2") if first_item else None
+    (lead.insert_before(bar) if lead else first_item.insert_before(bar))
+    soup.append(BeautifulSoup('<script defer src="__ASSETS__qfilter.js"></script>', "html.parser"))
+
+
 def build_topics_page(pages: dict[str, Page]) -> Page:
     lines = ["---", 'title: "Past-paper topics: find every question by topic"', "---", "",
              "# Past-paper topics", "",
@@ -436,22 +595,9 @@ def build_topics_page(pages: dict[str, Page]) -> Page:
         rel = f"week-{n}/week-{n}-exam-questions.md"
         if rel not in pages:
             continue
-        body = pages[rel].body
-        m = re.search(r"## Topic checklist and evidence\s*\n(.*?)(?=\n## )", body, re.S)
-        if not m:
+        rows = topic_rows(pages[rel].body)
+        if not rows:
             continue
-        rows, cur = [], None
-        for ln in m.group(1).splitlines():
-            if not ln.startswith("|") or re.match(r"^\|\s*:?-", ln):
-                continue
-            cells = [c.strip() for c in ln.strip().strip("|").split("|")]
-            if len(cells) < 2 or cells[0] == "Topic":
-                continue
-            if cells[0]:
-                cur = [cells[0], cells[1]]
-                rows.append(cur)
-            elif cur:
-                cur[1] += ", " + cells[1]
         notes = f"week-{n}/week-{n}-notes.md"
         lines += [f"## Week {n} — {short_week_title(pages[notes].title)}", "",
                   f"[Study notes](week-{n}/week-{n}-notes.md) · [Exam-focused guide](week-{n}/week-{n}-exam-focused-notes.md) · "
@@ -552,12 +698,16 @@ def main() -> int:
     search: list[dict] = []
     all_ids: dict[str, set[str]] = {}
 
+    a2t = anchor_topics(pages)
+    dup_report: list[dict] = []
     for p in pages.values():
         text = prepare(p.body, pages, by_stem, p)
         body, toc = render_markdown(text)
         soup = BeautifulSoup(body, "html.parser")
         rewrite_links(soup, p, resolver, internal)
         convert_callouts(soup)
+        if re.fullmatch(r"week-\d/week-\d-exam-questions\.md", p.rel):
+            annotate_questions(soup, p, a2t, dup_report)
         # Metadata chips from front matter.
         chips = []
         for t in (p.fm.get("tags") or []):
@@ -575,7 +725,7 @@ def main() -> int:
                                 f'<p>Read the <a href="{rel_eli}">Week {wk.group(1)} plain-language (ELI12) note</a> first, then come back here.</p></div>', "html.parser")
             anchor = soup.find("div", class_="meta-chips") or soup.find("h1")
             (anchor.insert_after(tip) if anchor else soup.insert(0, tip))
-        p.html = str(soup)
+        p.html = str(soup).replace("__ASSETS__", ("../" * p.out.count("/")) + "assets/")
         p.ids = {t["id"] for t in soup.find_all(attrs={"id": True})}
         all_ids[p.out] = p.ids
         p.toc = toc
@@ -608,6 +758,8 @@ def main() -> int:
         limit = 4000 if p.rel.startswith("sources/exam-papers/extractions") else 30000
         search.append({"title": p.title, "url": p.out, "text": text_only[:limit]})
 
+    if os.environ.get("DUP_REPORT"):  # review aid; not published
+        Path(os.environ["DUP_REPORT"]).write_text(json.dumps(dup_report, indent=1), encoding="utf-8")
     # Home page.
     home = home_article(pages)
     soup = BeautifulSoup(home, "html.parser")
